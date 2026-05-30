@@ -1,17 +1,20 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import Redis from 'ioredis';
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import type { CreateAdminDto } from './dto/create-admin.dto';
 import type { LoginDto } from './dto/login.dto';
 import type { SignupDto } from './dto/signup.dto';
 import type { AuthenticatedUser } from './types/authenticated-user';
@@ -68,6 +71,77 @@ export class AuthService {
         'AUTH_OTP_ENABLED=false — signup skips OTP and creates accounts immediately. NEVER use in production.',
       );
     }
+  }
+
+  /**
+   * Bootstrap / promote an ADMIN or SUPER_ADMIN without terminal access.
+   *
+   * Gated by the ADMIN_SETUP_SECRET env var: the request body must carry a
+   * `setupSecret` that matches it (constant-time compared). This is the API
+   * equivalent of `npm run create-admin` for CI/CD deploys where you can't
+   * open a shell on the box.
+   *
+   * If a user with that email exists they're promoted to the requested role
+   * and their password is reset; otherwise a new active admin + wallet is
+   * created. Returns the user shape (no tokens — log in via /auth/login after).
+   */
+  async createAdmin(dto: CreateAdminDto) {
+    const expected = this.config.get<string>('ADMIN_SETUP_SECRET');
+    if (!expected) {
+      this.logger.error('ADMIN_SETUP_SECRET is not configured — refusing admin bootstrap');
+      throw new ServiceUnavailableException('Admin bootstrap is not configured');
+    }
+    if (!this.secretMatches(dto.setupSecret, expected)) {
+      this.logger.warn(`Admin bootstrap rejected — bad setup secret for ${dto.email}`);
+      throw new ForbiddenException('Invalid setup secret');
+    }
+
+    const role = dto.role ?? 'SUPER_ADMIN';
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+
+    if (existing) {
+      const updated = await this.prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          passwordHash,
+          fullName: dto.fullName,
+          phone: dto.phone ?? null,
+          role,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+      });
+      const wallet = await this.prisma.wallet.findUnique({ where: { userId: updated.id } });
+      if (!wallet) await this.prisma.wallet.create({ data: { userId: updated.id } });
+      this.logger.log(`Admin bootstrap promoted existing user ${updated.email} → ${updated.role}`);
+      return { user: this.shape(updated), created: false };
+    }
+
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: dto.email,
+          passwordHash,
+          fullName: dto.fullName,
+          phone: dto.phone ?? null,
+          role,
+          status: 'ACTIVE',
+        },
+      });
+      await tx.wallet.create({ data: { userId: created.id } });
+      return created;
+    });
+    this.logger.log(`Admin bootstrap created ${user.role} ${user.email}`);
+    return { user: this.shape(user), created: true };
+  }
+
+  /** Constant-time string comparison that's safe against length leaks. */
+  private secretMatches(provided: string, expected: string): boolean {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
   }
 
   /**

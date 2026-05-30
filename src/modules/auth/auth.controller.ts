@@ -14,6 +14,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthService } from './auth.service';
+import { CreateAdminDto } from './dto/create-admin.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { SignupDto } from './dto/signup.dto';
@@ -75,6 +76,17 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto.email, dto.otp, dto.newPassword);
+  }
+
+  @Post('admin/bootstrap')
+  @ApiOperation({
+    summary:
+      'Create or promote an ADMIN / SUPER_ADMIN without terminal access. Gated by the ADMIN_SETUP_SECRET env var — the body must carry a matching setupSecret. Intended for CI/CD deploys where you cannot run the create-admin script.',
+  })
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  createAdmin(@Body() dto: CreateAdminDto) {
+    return this.auth.createAdmin(dto);
   }
 
   @Post('login')
