@@ -30,10 +30,16 @@ import { EmailModule } from './modules/email/email.module';
     LoggerModule.forRoot({
       pinoHttp: {
         level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+        // pino-pretty runs in a worker thread (thread-stream), which can hang or
+        // fail to spawn in some container runtimes — and on Railway that hang
+        // happens during boot, before the HTTP server starts, so the healthcheck
+        // fails with no visible error. Make it strictly opt-in via LOG_PRETTY=true
+        // (local dev only). Everywhere else we emit plain JSON straight to stdout,
+        // which never blocks.
         transport:
-          process.env.NODE_ENV === 'production'
-            ? undefined
-            : { target: 'pino-pretty', options: { singleLine: true, colorize: true } },
+          process.env.LOG_PRETTY === 'true'
+            ? { target: 'pino-pretty', options: { singleLine: true, colorize: true } }
+            : undefined,
         autoLogging: { ignore: (req) => req.url?.startsWith('/health') ?? false },
         redact: ['req.headers.authorization', 'req.headers.cookie'],
       },
