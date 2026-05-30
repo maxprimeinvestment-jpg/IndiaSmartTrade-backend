@@ -1,5 +1,6 @@
 import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
+import { createRedisClient } from '../../../common/redis';
 import { MARKET_TICKS_CHANNEL, type LiveQuote, type MarketProvider } from '../market-provider.interface';
 import { SYMBOLS, type SymbolDef } from '../symbols';
 
@@ -23,8 +24,8 @@ export abstract class BaseMarketProvider implements MarketProvider, OnModuleInit
 
   constructor(redisUrl: string, loggerName?: string) {
     this.logger = new Logger(loggerName ?? this.constructor.name);
-    this.redis = new Redis(redisUrl);
-    this.publisher = new Redis(redisUrl);
+    this.redis = createRedisClient(redisUrl);
+    this.publisher = createRedisClient(redisUrl);
   }
 
   /** Symbols this provider handles. Subclasses override to constrain. */
@@ -32,15 +33,26 @@ export abstract class BaseMarketProvider implements MarketProvider, OnModuleInit
     return SYMBOLS;
   }
 
-  async onModuleInit() {
+  onModuleInit() {
     for (const sym of this.symbols) {
       this.state.set(sym.code, this.initial(sym));
     }
-    for (const [, q] of this.state) {
-      await this.redis.set(`quote:${q.symbol}`, JSON.stringify(q), 'EX', 86_400);
+    // Fire-and-forget: seeding Redis + starting the feed must not block app
+    // boot. If Redis is briefly unreachable the HTTP server still comes up
+    // (so /health passes) and this self-heals once the connection is ready.
+    void this.bootstrap();
+  }
+
+  private async bootstrap() {
+    try {
+      for (const [, q] of this.state) {
+        await this.redis.set(`quote:${q.symbol}`, JSON.stringify(q), 'EX', 86_400);
+      }
+      await this.start();
+      this.logger.log(`${this.providerName} provider running with ${this.symbols.length} symbols`);
+    } catch (e) {
+      this.logger.error(`${this.providerName} provider failed to start`, e as Error);
     }
-    await this.start();
-    this.logger.log(`${this.providerName} provider running with ${this.symbols.length} symbols`);
   }
 
   async onModuleDestroy() {

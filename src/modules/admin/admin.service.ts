@@ -1,7 +1,8 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
+import { createRedisClient } from '../../common/redis';
 import { PrismaService } from '../../prisma/prisma.service';
 import { paginated } from '../../common/dto/pagination.dto';
 import { REALTIME_TOKEN, type RealtimeEmitter } from '../../common/gateway/realtime';
@@ -28,7 +29,7 @@ export class AdminService {
     @Inject(REALTIME_TOKEN) private readonly realtime: RealtimeEmitter,
     @Inject(TRADING_CLIENT) private readonly trading: TradingClient,
   ) {
-    this.redis = new Redis(this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379');
+    this.redis = createRedisClient(this.config.get<string>('REDIS_URL'));
   }
 
   // ---------- Dashboard ----------

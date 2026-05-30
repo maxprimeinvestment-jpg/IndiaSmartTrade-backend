@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
+import { createRedisClient } from '../../common/redis';
 import { REALTIME_TOKEN, type RealtimeEmitter } from '../../common/gateway/realtime';
 import { TRADING_CLIENT, type TradingClient } from '../../common/trading/trading-client';
 import { MARKET_TICKS_CHANNEL, type LiveQuote } from '../market-data/market-provider.interface';
@@ -20,11 +21,10 @@ export class PositionsEngine implements OnModuleInit {
     @Inject(REALTIME_TOKEN) private readonly realtime: RealtimeEmitter,
     @Inject(TRADING_CLIENT) private readonly trading: TradingClient,
   ) {
-    this.subscriber = new Redis(config.get<string>('REDIS_URL') ?? 'redis://localhost:6379');
+    this.subscriber = createRedisClient(config.get<string>('REDIS_URL'));
   }
 
-  async onModuleInit() {
-    await this.subscriber.subscribe(MARKET_TICKS_CHANNEL);
+  onModuleInit() {
     this.subscriber.on('message', (_channel, message) => {
       try {
         const ticks = JSON.parse(message) as LiveQuote[];
@@ -33,7 +33,12 @@ export class PositionsEngine implements OnModuleInit {
         this.logger.error('Failed to parse tick payload', e as Error);
       }
     });
-    this.logger.log('PositionsEngine subscribed to market.ticks');
+    // Fire-and-forget: don't block app boot on the Redis connection. ioredis
+    // queues the SUBSCRIBE until connected and auto-resubscribes on reconnect.
+    this.subscriber
+      .subscribe(MARKET_TICKS_CHANNEL)
+      .then(() => this.logger.log('PositionsEngine subscribed to market.ticks'))
+      .catch((e) => this.logger.error('Failed to subscribe to market.ticks', e as Error));
   }
 
   private processTick(tick: LiveQuote) {

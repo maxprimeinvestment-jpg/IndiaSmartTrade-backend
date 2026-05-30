@@ -10,8 +10,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createRedisClient } from '../../common/redis';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import type { CreateAdminDto } from './dto/create-admin.dto';
@@ -64,7 +65,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly email: EmailService,
   ) {
-    this.redis = new Redis(this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379');
+    this.redis = createRedisClient(this.config.get<string>('REDIS_URL'));
     this.otpEnabled = this.config.get<string>('AUTH_OTP_ENABLED') !== 'false';
     if (!this.otpEnabled) {
       this.logger.warn(

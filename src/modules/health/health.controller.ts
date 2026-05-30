@@ -1,7 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
+import { createRedisClient } from '../../common/redis';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @ApiTags('health')
@@ -38,8 +38,12 @@ export class HealthController {
   }
 
   private async checkRedis() {
-    const url = this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379';
-    const client = new Redis(url, { lazyConnect: true });
+    const client = createRedisClient(this.config.get<string>('REDIS_URL'), {
+      lazyConnect: true,
+      // Bound the readiness probe so a dead Redis can't hang the request.
+      retryStrategy: () => null,
+      maxRetriesPerRequest: 1,
+    });
     try {
       await client.connect();
       const reply = await client.ping();

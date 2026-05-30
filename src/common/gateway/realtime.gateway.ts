@@ -9,8 +9,9 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import type { Server, Socket } from 'socket.io';
+import { createRedisClient } from '../redis';
 import {
   MARKET_TICKS_CHANNEL,
   type LiveQuote,
@@ -36,11 +37,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnModuleInit, Realt
     private readonly config: ConfigService,
     @Inject(MARKET_PROVIDER_TOKEN) private readonly market: MarketProvider,
   ) {
-    this.subscriber = new Redis(this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379');
+    this.subscriber = createRedisClient(this.config.get<string>('REDIS_URL'));
   }
 
-  async onModuleInit() {
-    await this.subscriber.subscribe(MARKET_TICKS_CHANNEL);
+  onModuleInit() {
     this.subscriber.on('message', (_channel, message) => {
       try {
         const ticks = JSON.parse(message) as LiveQuote[];
@@ -55,6 +55,11 @@ export class RealtimeGateway implements OnGatewayConnection, OnModuleInit, Realt
         this.logger.error('Failed to handle market tick', e as Error);
       }
     });
+    // Fire-and-forget: don't block app boot on the Redis connection. ioredis
+    // queues the SUBSCRIBE until connected and auto-resubscribes on reconnect.
+    this.subscriber
+      .subscribe(MARKET_TICKS_CHANNEL)
+      .catch((e) => this.logger.error('Failed to subscribe to market.ticks', e as Error));
     setInterval(() => void this.broadcastExposure(), 5000);
   }
 
