@@ -1,0 +1,387 @@
+// IndiaSmartTrade — Prisma schema
+// Tables: users, wallets, wallet_transactions, deposits, withdrawals,
+//         positions, trade_history, live_quotes, bank_accounts,
+//         notifications, support_tickets, admin_logs, sessions
+//
+// Conventions:
+// - Money fields use Decimal(18, 6).
+// - Snake-case in DB via @map / @@map.
+// - createdAt / updatedAt on every entity.
+// - Soft deletes via deletedAt nullable on user-facing entities.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────
+// Enums
+// ────────────────────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  FROZEN
+  DELETED
+}
+
+enum MarketCategory {
+  CURRENCY
+  INDICES
+  COMMODITY
+  CRYPTO
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum PositionStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum PositionCloseReason {
+  USER
+  STOP_LOSS
+  TAKE_PROFIT
+  ADMIN_FORCE
+  LIQUIDATION
+}
+
+enum WalletTxnType {
+  DEPOSIT
+  WITHDRAW
+  TRADE_MARGIN_LOCK
+  TRADE_MARGIN_RELEASE
+  TRADE_PNL
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+  WITHDRAW_REFUND
+}
+
+enum DepositStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WithdrawStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+enum NotificationType {
+  DEPOSIT_APPROVED
+  DEPOSIT_REJECTED
+  WITHDRAW_APPROVED
+  WITHDRAW_REJECTED
+  POSITION_CLOSED
+  ADMIN_MESSAGE
+  TICKET_REPLY
+  SYSTEM
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum TicketCategory {
+  DEPOSIT
+  WITHDRAW
+  TRADE
+  ACCOUNT
+  OTHER
+}
+
+enum OHLCInterval {
+  M1
+  M5
+  M15
+  M30
+  H1
+  H4
+  D1
+}
+
+// ────────────────────────────────────────────────────────────
+// Models
+// ────────────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  phone        String?    @unique
+  passwordHash String     @map("password_hash")
+  fullName     String     @map("full_name")
+  avatarUrl    String?    @map("avatar_url")
+  role         UserRole   @default(USER)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  deletedAt    DateTime?  @map("deleted_at")
+
+  wallet              Wallet?
+  walletTransactions  WalletTransaction[]
+  deposits            Deposit[]            @relation("UserDeposits")
+  verifiedDeposits    Deposit[]            @relation("VerifiedByAdmin")
+  withdrawals         Withdrawal[]         @relation("UserWithdrawals")
+  approvedWithdrawals Withdrawal[]         @relation("ApprovedByAdmin")
+  positions           Position[]
+  forcedClosedBy      Position[]           @relation("PositionForcedBy")
+  tradeHistory        TradeHistory[]
+  notifications       Notification[]
+  supportTickets      SupportTicket[]
+  adminLogs           AdminLog[]
+  sessions            Session[]
+
+  @@index([role])
+  @@map("users")
+}
+
+model Wallet {
+  id          String   @id @default(uuid())
+  userId      String   @unique @map("user_id")
+  balance     Decimal  @default(0) @db.Decimal(18, 6)
+  marginUsed  Decimal  @default(0) @map("margin_used") @db.Decimal(18, 6)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id           String        @id @default(uuid())
+  userId       String        @map("user_id")
+  type         WalletTxnType
+  amount       Decimal       @db.Decimal(18, 6)
+  balanceAfter Decimal       @map("balance_after") @db.Decimal(18, 6)
+  reference    String?
+  metadata     Json?
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
+  @@map("wallet_transactions")
+}
+
+model BankAccount {
+  id            String    @id @default(uuid())
+  bankName      String    @map("bank_name")
+  accountName   String    @map("account_name")
+  accountNumber String    @map("account_number")
+  ifsc          String
+  upiId         String?   @map("upi_id")
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  deposits Deposit[]
+
+  @@map("bank_accounts")
+}
+
+model Deposit {
+  id              String        @id @default(uuid())
+  userId          String        @map("user_id")
+  bankAccountId   String        @map("bank_account_id")
+  amount          Decimal       @db.Decimal(18, 6)
+  utr             String
+  screenshotUrl   String        @map("screenshot_url")
+  status          DepositStatus @default(PENDING)
+  rejectionReason String?       @map("rejection_reason")
+  verifiedById    String?       @map("verified_by_id")
+  verifiedAt      DateTime?     @map("verified_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  user        User        @relation("UserDeposits", fields: [userId], references: [id], onDelete: Cascade)
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  verifiedBy  User?       @relation("VerifiedByAdmin", fields: [verifiedById], references: [id])
+
+  @@index([userId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("deposits")
+}
+
+model Withdrawal {
+  id              String         @id @default(uuid())
+  userId          String         @map("user_id")
+  amount          Decimal        @db.Decimal(18, 6)
+  bankName        String         @map("bank_name")
+  accountName     String         @map("account_name")
+  accountNumber   String         @map("account_number")
+  ifsc            String
+  status          WithdrawStatus @default(PENDING)
+  rejectionReason String?        @map("rejection_reason")
+  approvedById    String?        @map("approved_by_id")
+  approvedAt      DateTime?      @map("approved_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  user       User  @relation("UserWithdrawals", fields: [userId], references: [id], onDelete: Cascade)
+  approvedBy User? @relation("ApprovedByAdmin", fields: [approvedById], references: [id])
+
+  @@index([userId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("withdrawals")
+}
+
+model Position {
+  id            String               @id @default(uuid())
+  userId        String               @map("user_id")
+  symbol        String
+  side          OrderSide
+  status        PositionStatus       @default(OPEN)
+  lots          Decimal              @db.Decimal(12, 4)
+  leverage      Int
+  entryPrice    Decimal              @map("entry_price") @db.Decimal(18, 6)
+  exitPrice     Decimal?             @map("exit_price") @db.Decimal(18, 6)
+  stopLoss      Decimal?             @map("stop_loss") @db.Decimal(18, 6)
+  takeProfit    Decimal?             @map("take_profit") @db.Decimal(18, 6)
+  marginUsed    Decimal              @map("margin_used") @db.Decimal(18, 6)
+  realizedPnl   Decimal?             @map("realized_pnl") @db.Decimal(18, 6)
+  closeReason   PositionCloseReason? @map("close_reason")
+  forcedById    String?              @map("forced_by_id")
+  openedAt      DateTime             @default(now()) @map("opened_at")
+  closedAt      DateTime?            @map("closed_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  forcedBy User?          @relation("PositionForcedBy", fields: [forcedById], references: [id])
+  history  TradeHistory?
+
+  @@index([userId, status])
+  @@index([symbol, status])
+  @@map("positions")
+}
+
+model TradeHistory {
+  id           String              @id @default(uuid())
+  positionId   String              @unique @map("position_id")
+  userId       String              @map("user_id")
+  symbol       String
+  side         OrderSide
+  lots         Decimal             @db.Decimal(12, 4)
+  leverage     Int
+  entryPrice   Decimal             @map("entry_price") @db.Decimal(18, 6)
+  exitPrice    Decimal             @map("exit_price") @db.Decimal(18, 6)
+  realizedPnl  Decimal             @map("realized_pnl") @db.Decimal(18, 6)
+  closeReason  PositionCloseReason @map("close_reason")
+  openedAt     DateTime            @map("opened_at")
+  closedAt     DateTime            @map("closed_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, closedAt(sort: Desc)])
+  @@map("trade_history")
+}
+
+model LiveQuote {
+  id        String       @id @default(uuid())
+  symbol    String
+  interval  OHLCInterval
+  startedAt DateTime     @map("started_at")
+  open      Decimal      @db.Decimal(18, 6)
+  high      Decimal      @db.Decimal(18, 6)
+  low       Decimal      @db.Decimal(18, 6)
+  close     Decimal      @db.Decimal(18, 6)
+  volume    Decimal      @default(0) @db.Decimal(18, 6)
+
+  @@unique([symbol, interval, startedAt])
+  @@index([symbol, interval, startedAt(sort: Desc)])
+  @@map("live_quotes")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  message   String
+  metadata  Json?
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model SupportTicket {
+  id        String         @id @default(uuid())
+  userId    String         @map("user_id")
+  subject   String
+  category  TicketCategory
+  status    TicketStatus   @default(OPEN)
+  messages  Json           @default("[]")
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  deletedAt DateTime?      @map("deleted_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, updatedAt(sort: Desc)])
+  @@map("support_tickets")
+}
+
+model AdminLog {
+  id         String   @id @default(uuid())
+  adminId    String   @map("admin_id")
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json?
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  admin User @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId, createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
+  @@map("admin_logs")
+}
+
+model Session {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  refreshTokenHash String   @unique @map("refresh_token_hash")
+  userAgent        String?  @map("user_agent")
+  ip               String?
+  lastUsedAt       DateTime @default(now()) @map("last_used_at")
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  revokedAt        DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
