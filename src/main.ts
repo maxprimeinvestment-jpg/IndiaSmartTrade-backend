@@ -36,9 +36,17 @@ async function bootstrap() {
     .map((s) => s.trim())
     .filter(Boolean);
 
+  // Allow all cross-origin requests by default. We reflect the request's Origin
+  // header (rather than '*') because '*' is rejected by browsers when
+  // credentials: true. Set CORS_ORIGINS to a comma-separated list to restrict.
+  const allowAll = corsOrigins.length === 0 || corsOrigins.includes('*');
+
   app.enableCors({
-    origin: corsOrigins.length ? corsOrigins : true,
+    origin: allowAll ? true : corsOrigins,
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Disposition'],
   });
 
   app.useGlobalPipes(
