@@ -5,5 +5,5 @@ dist/
 .env.*.local
 *.log
 coverage/
-.tsbuildinfo
+*.tsbuildinfo
 prisma/migrations/dev/
