@@ -21,9 +21,17 @@ import { diskStorage } from 'multer';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
-const UPLOAD_DIR = resolve(__dirname, '../../../../uploads');
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ? resolve(process.env.UPLOAD_DIR)
+  : join(process.cwd(), 'uploads');
 
-if (!existsSync(UPLOAD_DIR)) mkdirSync(UPLOAD_DIR, { recursive: true });
+try {
+  if (!existsSync(UPLOAD_DIR)) mkdirSync(UPLOAD_DIR, { recursive: true });
+} catch (err) {
+  // Don't crash the app at boot if the upload dir isn't writable (e.g. read-only
+  // container FS). The dev upload endpoint will fail at request time instead.
+  console.warn(`[upload] Could not create upload dir "${UPLOAD_DIR}":`, (err as Error).message);
+}
 
 @ApiTags('upload')
 @Controller('upload')
