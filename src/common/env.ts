@@ -39,6 +39,12 @@ export class EnvSchema {
 }
 
 export function validateEnv(raw: Record<string, unknown>): EnvSchema {
+  // Normalize NODE_ENV casing so values like "Production" don't fail validation.
+  // Also keep process.env in sync so other casing-sensitive checks agree.
+  if (typeof raw.NODE_ENV === 'string') {
+    raw = { ...raw, NODE_ENV: raw.NODE_ENV.toLowerCase() };
+    process.env.NODE_ENV = process.env.NODE_ENV?.toLowerCase();
+  }
   const env = plainToInstance(EnvSchema, raw, { enableImplicitConversion: true });
   const errors = validateSync(env, { skipMissingProperties: false });
   if (errors.length > 0) {
