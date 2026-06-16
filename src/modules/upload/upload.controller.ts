@@ -15,22 +15,34 @@ import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { existsSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { diskStorage } from 'multer';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
+// In production the working dir (e.g. /app) is owned by root while the process
+// runs as a non-root user, so it isn't writable. Fall back to the OS temp dir,
+// which is always writable. Override with UPLOAD_DIR if you mount a volume.
 const UPLOAD_DIR = process.env.UPLOAD_DIR
   ? resolve(process.env.UPLOAD_DIR)
-  : join(process.cwd(), 'uploads');
+  : process.env.NODE_ENV === 'production'
+    ? join(tmpdir(), 'uploads')
+    : join(process.cwd(), 'uploads');
 
-try {
-  if (!existsSync(UPLOAD_DIR)) mkdirSync(UPLOAD_DIR, { recursive: true });
-} catch (err) {
-  // Don't crash the app at boot if the upload dir isn't writable (e.g. read-only
-  // container FS). The dev upload endpoint will fail at request time instead.
-  console.warn(`[upload] Could not create upload dir "${UPLOAD_DIR}":`, (err as Error).message);
+// Lazily ensure the upload dir exists. We must NOT create it at module-load time:
+// passing a string `destination` to multer's diskStorage runs mkdirp.sync() inside
+// its constructor (which the @UseInterceptors decorator evaluates at import), so a
+// non-writable dir would crash the entire app at boot. Using a `destination`
+// function defers dir creation to request time, where a failure is contained.
+function ensureUploadDir(cb: (err: Error | null, dir: string) => void) {
+  try {
+    if (!existsSync(UPLOAD_DIR)) mkdirSync(UPLOAD_DIR, { recursive: true });
+    cb(null, UPLOAD_DIR);
+  } catch (err) {
+    cb(err as Error, UPLOAD_DIR);
+  }
 }
 
 @ApiTags('upload')
@@ -80,7 +92,7 @@ export class UploadController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: UPLOAD_DIR,
+        destination: (_req, _file, cb) => ensureUploadDir(cb),
         filename: (_req, file, cb) => {
           const ext = extname(file.originalname).toLowerCase().replace(/[^.\w]/g, '');
           cb(null, `${randomUUID()}${ext}`);
